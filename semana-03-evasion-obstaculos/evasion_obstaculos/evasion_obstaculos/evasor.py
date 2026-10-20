@@ -133,7 +133,31 @@ class Evasor(Node):
              calibrados como pensás, antes de que el error se note como un
              giro raro del robot.
         """
-        pass
+        if self.ultimo_scan is None:
+            return False
+        #ultimo scan tiene la data de las mediciones de los 360° del lidar que viene en radianes
+        num_rayos = len(self.ultimo_scan.ranges)
+        angles = self.ultimo_scan.angle_min + np.arange(num_rayos) * self.ultimo_scan.angle_increment
+
+        #paso a rad los 180° asi se lo puedo restar a los angulos
+        rad_frente = math.radians(self.angulo_frente_deg)
+        angles_centrados = angles - rad_frente
+
+        #normalizo los angulos(rads --> [-pi, pi])
+        angles_norm = np.array([ self.normalizar_angulo(ang) for ang in angles_centrados])
+
+        #mascaras
+        #mask cono:
+        # como el angulo del cono es 60° quiero ver que los angs esten entre -30 y 30(en rads) 
+        medio_cono = math.radians(self.angulo_vision_deg / 2.0 )
+        mask_cono = np.abs(angles_norm) <= medio_cono 
+        mask_cerca = np.array(self.ultimo_scan.ranges) < self.distancia_choque_m
+
+        masks = mask_cono & mask_cerca
+        self.publicar_scan_filtrado(masks)
+
+        return bool(np.any(masks)) #retorno si hay al menos ALGUN obstaculo en el rango
+        
 
     def iniciar_giro(self):
         """Guarda el yaw actual como referencia para saber, más adelante,
@@ -150,6 +174,8 @@ class Evasor(Node):
         adelante, a velocidad_adelante (m/s)."""
         msg = Twist()
         # TODO: completar el campo de avance
+        msg.linear.x = self.velocidad_adelante
+        msg.angular.z = 0.0
         return msg
 
     def girar(self) -> Twist:
@@ -157,6 +183,8 @@ class Evasor(Node):
         a velocidad_angular (rad/s)."""
         msg = Twist()
         # TODO: completar el campo de giro
+        msg.linear.x = 0.0
+        msg.angular.z = self.velocidad_angular
         return msg
 
     def maquina_de_estados(self):
@@ -182,11 +210,18 @@ class Evasor(Node):
         # Transición de estados
 
         if self.estado == ESTADO_AVANZAR:
-            pass
-        if self.estado == ESTADO_GIRAR:
-            pass
+            if self.hay_obstaculo():
+                self.iniciar_giro() #me guardo donde empece a girar
+                self.estado = ESTADO_GIRAR
+                self.get_logger().info('Obstaculo detectado: cambiando a GIRAR')
 
-        
+        elif self.estado == ESTADO_GIRAR:
+            giro_final = math.radians(self.angulo_giro_deg)
+            if giro_final <= self.angulo_girado():
+                self.estado = ESTADO_AVANZAR
+                self.get_logger().info('Giro Completo: cambiando a AVANZAR')
+
+
         # Acción según el estado
         
         if self.estado == ESTADO_AVANZAR:
