@@ -135,7 +135,14 @@ class DetectorColor(Node):
              ilegible. Guardá el último valor en self.ultimo_valor_publicado
              para poder compararlo la próxima vez.
         """
-        return False
+        if self.ultima_imagen is None:
+            return
+
+        # Convertimos la imagen BGR de OpenCV a HSV
+        imagen_hsv = cv2.cvtColor(self.ultima_imagen, cv2.COLOR_BGR2HSV)
+
+        # Llamamos a tu función para que se ejecute el cv2.imshow
+        self.mascara_rojo(imagen_hsv)
 
 
 def main(args=None):
