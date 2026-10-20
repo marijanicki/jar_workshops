@@ -86,7 +86,21 @@ class DetectorColor(Node):
           4. Combinar las dos máscaras con cv2.bitwise_or (un pixel es
              rojo si cae en cualquiera de los dos rangos).
         """
-        pass
+        bajo_1 = np.array([self.hue_rojo_bajo_1, self.saturacion_min, self.valor_min])
+        alto_1 = np.array([self.hue_rojo_alto_1, 255, 255])
+
+        bajo_2 =  np.array([self.hue_rojo_bajo_2, self.saturacion_min, self.valor_min])
+        alto_2 = np.array([self.hue_rojo_alto_2, 255, 255])
+
+        mask_1 = cv2.inRange(imagen_hsv, bajo_1, alto_1)
+        mask_2 = cv2.inRange(imagen_hsv, bajo_2, alto_2)
+
+
+        mask = cv2.bitwise_or(mask_1, mask_2)
+        cv2.imshow("Mascara Rojo", mask)
+        cv2.waitKey(1)
+        return mask
+
 
     def hay_cuadrado_rojo(self) -> bool:
         """
@@ -121,7 +135,7 @@ class DetectorColor(Node):
              ilegible. Guardá el último valor en self.ultimo_valor_publicado
              para poder compararlo la próxima vez.
         """
-        pass
+        return False
 
 
 def main(args=None):
