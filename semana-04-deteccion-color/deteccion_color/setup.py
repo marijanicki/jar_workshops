@@ -24,6 +24,7 @@ setup(
             # los encuentren. El formato es
             # 'nombre_del_ejecutable = paquete.modulo:funcion' 
             # los ejecutables tienen que llamarse "detector" y "detector_scan"
+            'detector = deteccion_color.detector:main'
         ],
     },
 )
