@@ -93,7 +93,6 @@ class CampoVerosimilitud(Node):
 
         return prob_esc
 
-
 def main(args=None):
     rclpy.init(args=args)
     nodo = CampoVerosimilitud()
