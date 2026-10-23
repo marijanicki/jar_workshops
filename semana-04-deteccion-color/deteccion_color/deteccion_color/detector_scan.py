@@ -66,7 +66,27 @@ def puntos_laser_a_pixeles(rangos, angulos, rotacion, traslacion, fx, fy, cx, cy
          por eso.
       6. Devolver (u, v, adelante).
     """
-    pass
+    #paso de polares a cartesianas
+    x = rangos*np.sin(angulos)
+    y = rangos*np.cos(angulos)
+    z = np.zeros_like(rangos)
+    #junto en r3
+    xyz = np.stack((x,y,z),axis= 1)
+
+    #2. transformo r3 --> r3 para que los puntos sean desde el punto de vista del lente en vez del lidar
+    punto_camara = xyz @ rotacion.T + traslacion
+    x_cam = punto_camara[:, 0]
+    y_cam = punto_camara[:, 1]
+    z_cam = punto_camara[:, 2]
+
+    adelante = z_cam > 0.01
+
+    #proyeccion pinhole
+    with np.errstate(divide='ignore', invalid='ignore'):
+        u = fx * (x_cam/z_cam) + cx, 
+        v = fy * (y_cam / z_cam) + cy
+    
+    return u,v,adelante
 
 
 class DetectorScanColor(Node):
@@ -120,6 +140,8 @@ class DetectorScanColor(Node):
         # TODO: arrancá por acá esta parte del workshop. Creá self.publisher_,
         # el publisher de LaserScan en el tópico 'scan_rojo' (mismo patrón que
         # create_subscription de arriba, pero con create_publisher).
+
+        self.publisher_ = self.create_publisher(LaserScan, 'scan_rojo',  qos_profile_sensor_data)
 
     def recibir_imagen(self, msg: Image):
         self.ultima_imagen = self.puente.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -193,7 +215,79 @@ class DetectorScanColor(Node):
               rangos_filtrados.tolist() como ranges. Publicarlo en
               self.publisher_.
         """
-        pass
+
+        if self.ultima_imagen is None or self.info_camara is None:
+            return
+
+        tf2 = self.obtener_transform_laser_a_camara(msg.header.frame_id)
+        if tf2 is None:
+            return
+
+        #extraer la traslacion de la tf2
+        traslacion = np.array([tf2.transform.translation.x , tf2.transform.translation.y, tf2.transform.translation.z])
+
+        rotacion = cuaternion_a_rotacion(tf2.transform.rotation.x , tf2.transform.rotation.y, tf2.transform.rotation.z, tf2.transform.rotation.w)
+        
+        #angulo y rangos
+        
+        rangos = np.array(msg.ranges)
+        n = len(rangos)
+        angulos = msg.angle_min + np.arange(n) * msg.angle_increment
+        """
+        Para que un rayo se considere válido, tiene que cumplir tres condiciones al mismo tiempo:
+
+    Ser finito (np.isfinite): Ser un número real, no un infinito (inf) ni un error (NaN).
+
+    Ser mayor al mínimo: Estar más lejos que la distancia mínima que el láser puede medir (msg.range_min).
+
+    Ser menor al máximo: Estar más cerca que el límite máximo del sensor (msg.range_max).
+        """
+        validos = np.isfinite(rangos) & (rangos >= msg.range_min) & (rangos <= msg.range_max)
+
+        u,v, adelante = puntos_laser_a_pixeles(rangos, angulos, rotacion, traslacion,self.info_camara['fx'], self.info_camara['fy'],
+            self.info_camara['cx'], self.info_camara['cy']
+        )
+
+        # 7. Filtramos para que no se salga de los bordes de la foto(dentro del cono)
+        ancho = self.info_camara['width']
+        alto = self.info_camara['height']
+        
+        # Tiene que estar delante de la cámara Y dentro del ancho Y dentro del alto
+        dentro_de_imagen = adelante & (u >= 0) & (u < ancho) & (v >= 0) & (v < alto)
+        img_hsv = cv2.cvtColor(self.ultima_imagen, cv2.COLOR_BGR2HSV)
+        red_mask = mascara_rojo(img_hsv, self.hue_rojo_bajo_1, self.hue_rojo_alto_1, self.hue_rojo_bajo_2, self.hue_rojo_alto_2,self.saturacion_min, self.valor_min)
+
+        es_rojo = np.zeros_like(rangos, dtype=bool)
+        #agarro solo loos u y v validos
+        idx_img = np.where(dentro_de_imagen)[0]
+        v_val = v[idx_img].astype(int)
+        u_val = u[idx_img].astype(int)
+
+
+        es_rojo[idx_img] = red_mask[v_val, u_val] >0
+
+        rangos_filtrados = np.where(validos & es_rojo,rangos, math.inf) 
+        
+        # 1. Creamos un mensaje LaserScan en blanco
+        scan_rojo = LaserScan()
+
+        # 2. Copiamos el encabezado (Tiene la marca de tiempo y el frame_id 'laser')
+        scan_rojo.header = msg.header
+        
+        # 3. Copiamos las reglas geométricas del abanico original
+        scan_rojo.angle_min = msg.angle_min
+        scan_rojo.angle_max = msg.angle_max
+        scan_rojo.angle_increment = msg.angle_increment
+        scan_rojo.time_increment = msg.time_increment
+        scan_rojo.scan_time = msg.scan_time
+        scan_rojo.range_min = msg.range_min
+        scan_rojo.range_max = msg.range_max
+
+        # 4. Inyectamos nuestros datos procesados
+        scan_rojo.ranges = rangos_filtrados.tolist()
+
+        # 5. Publicamos el mensaje al mundo
+        self.publisher_.publish(scan_rojo)
 
 
 def main(args=None):

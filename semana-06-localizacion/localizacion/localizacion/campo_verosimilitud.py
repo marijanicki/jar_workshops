@@ -80,7 +80,18 @@ class CampoVerosimilitud(Node):
              obstáculos mismos (distancia 0) y decae a medida que te alejás.
           5. Escalar a 0-100 (multiplicar por 100) y devolver.
         """
-        pass
+        mask = grid >= UMBRAL_OCUPADO #veo obstaculos true ocupado 
+        """
+        distance_transform_edt (Transformada Exacta de Distancia Euclidiana) 
+        escanea la matriz completa buscando los ceros y asignando valores 
+        al resto de las celdas basándose en ellos.
+        """
+        distancias = ndimage.distance_transform_edt(~mask)
+        dist_m = distancias * resolucion
+        prob = np.exp(-(dist_m**2) /( 2 * (self.sigma_sensor**2)))
+        prob_esc = prob * 100
+
+        return prob_esc
 
 
 def main(args=None):

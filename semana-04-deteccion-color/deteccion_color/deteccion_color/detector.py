@@ -97,8 +97,7 @@ class DetectorColor(Node):
 
 
         mask = cv2.bitwise_or(mask_1, mask_2)
-        cv2.imshow("Mascara Rojo", mask)
-        cv2.waitKey(1)
+
         return mask
 
 
@@ -116,7 +115,14 @@ class DetectorColor(Node):
           4. Medir self.area_mayor_contorno(...) de esa máscara.
           5. Devolver True si esa área es mayor a self.area_minima_px.
         """
-        pass
+        if self.ultima_imagen is None: 
+            return False
+        img_HSV = cv2.cvtColor(self.ultima_imagen, cv2.COLOR_BGR2HSV)
+        red_mask = self.mascara_rojo(img_HSV)
+        max_area = self.area_mayor_contorno(red_mask)
+        if self.area_minima_px < max_area:
+            return True
+        return False
 
     def procesar_imagen(self):
         """
@@ -135,14 +141,18 @@ class DetectorColor(Node):
              ilegible. Guardá el último valor en self.ultimo_valor_publicado
              para poder compararlo la próxima vez.
         """
-        if self.ultima_imagen is None:
-            return
+        actual_val = self.hay_cuadrado_rojo()
+        if actual_val:
+            msj = Bool()
+            msj.data = True
+            self.publisher_.publish(msj)
 
-        # Convertimos la imagen BGR de OpenCV a HSV
-        imagen_hsv = cv2.cvtColor(self.ultima_imagen, cv2.COLOR_BGR2HSV)
-
-        # Llamamos a tu función para que se ejecute el cv2.imshow
-        self.mascara_rojo(imagen_hsv)
+        if self.ultimo_valor_publicado != actual_val:
+            if actual_val: #si es True es que vio cuadrado rojo
+                self.get_logger().info(f'Cuadrado rojo')
+            else:
+                self.get_logger().info(f'No hay Cuadrado rojo')
+            self.ultimo_valor_publicado = actual_val
 
 
 def main(args=None):
