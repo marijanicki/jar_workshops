@@ -335,7 +335,38 @@ class Localizador(Node):
           5. Devolver un array nuevo con esas x', y', theta' (y el mismo
              peso que tenían, no se toca acá).
         """
-        pass
+        d_trans_x = dx  * np.cos(theta0) + dy * np.sin(theta0) #adelante
+        d_trans_y = - dx * np.sin(theta0) + dy * np.cos(theta0) #de costado
+        d_rot = dtheta #lo que roto 
+
+        std_x   = np.sqrt( self.gamma1 *d_trans_x**2 + self.gamma2*d_trans_y**2 + self.gamma3*d_rot**2)
+        std_y   = np.sqrt(self.gamma2*d_trans_x**2 + self.gamma1*d_trans_y**2 + self.gamma3*d_rot**2)
+        std_rot = np.sqrt(self.gamma4*d_trans_x**2 + self.gamma5*d_trans_y**2 + self.gamma6*d_rot**2)
+
+        N = len(particulas) # o particulas.shape[0]
+
+        d_trans_x_hat = d_trans_x - np.random.normal(0.0, std_x, N)
+        d_trans_y_hat = d_trans_y - np.random.normal(0.0, std_y, N)
+        d_rot_hat     = d_rot     - np.random.normal(0.0, std_rot, N)
+
+        # Momento de extracción: "Desarmás" la matriz que te pasaron 
+        # para tener la x, la y y el theta de TODAS las partículas a mano. particulas(x,y,theta,pesos)
+        x = particulas[:, 0]
+        y = particulas[:, 1]
+        theta = particulas[:, 2]
+        pesos = particulas[:, 3]
+
+        # Ahora sí, aplicás la fórmula literal del workshop rotando por ese theta:
+        x_nueva = x + d_trans_x_hat * np.cos(theta) - d_trans_y_hat * np.sin(theta)
+        y_nueva = y + d_trans_x_hat * np.sin(theta) + d_trans_y_hat * np.cos(theta)
+
+        # Normalizar theta' como pide el texto
+        theta_nueva = np.arctan2(np.sin(theta + d_rot_hat), np.cos(theta + d_rot_hat))
+
+        # --- INICIO DEL PASO 5 ---
+        # Volvés a armar la tabla con los valores nuevos y la devolvés
+        particulas_nuevas = np.column_stack((x_nueva, y_nueva, theta_nueva, pesos))
+        return particulas_nuevas
 
     def pesar_particulas(self, particulas, puntos_scan):
         """
@@ -370,7 +401,88 @@ class Localizador(Node):
           6. Normalizar: pesos /= pesos.sum() (si la suma da 0, devolvé
              pesos uniformes 1/N en su lugar, para no dividir por cero).
         """
-        pass
+        # 1. Separamos los datos de las partículas (las ponemos en vertical, Nx1)
+        x_p = particulas[:, 0][:, None]
+        y_p = particulas[:, 1][:, None]
+        theta_p = particulas[:, 2][:, None]
+
+        # 2. Separamos los puntos del láser (los ponemos en horizontal, 1xM)
+        x_laser = puntos_scan[:, 0][None, :]
+        y_laser = puntos_scan[:, 1][None, :]
+
+        # 3. Calculamos la rotación + traslación de golpe para todo
+        cos_t = np.cos(theta_p)
+        sin_t = np.sin(theta_p)
+
+        # ¡Es tu misma matriz de rotación!
+        xs_global = x_p + (x_laser * cos_t) - (y_laser * sin_t)
+        ys_global = y_p + (x_laser * sin_t) + (y_laser * cos_t)
+
+        #resolución: Cuántos metros mide cada "píxel" o celda del mapa
+
+        # --- PASO 2: Convertir coordenadas (metros) a índices de celda (enteros) ---
+
+        resolucion = self.info_mapa.resolution
+        origen_x = self.info_mapa.origin.position.x
+        origen_y = self.info_mapa.origin.position.y
+
+        # Las X corresponden a las columnas de la matriz
+        columnas = ((xs_global - origen_x) / resolucion).astype(int)
+
+        # Las Y corresponden a las filas de la matriz
+        filas = ((ys_global - origen_y) / resolucion).astype(int)
+
+        # --- PASO 3: Filtrar los límites ---
+
+        # Sacamos cuánto mide el mapa de alto (filas) y ancho (columnas)
+        alto, ancho = self.campo.shape
+
+        # Creamos una máscara (matriz de Trues y Falses) donde las condiciones se cumplen.
+        # Usamos el operador "bitwise and" (&) de NumPy.
+        validos = (filas >= 0) & (filas < alto) & (columnas >= 0) & (columnas < ancho)
+
+        # --- PASO 4: Leer las probabilidades ---
+
+        # Creamos una matriz gigante (300x50) llena de nuestra probabilidad mínima (1.0)
+        probabilidades = np.full(filas.shape, 1.0)
+
+        # Y ahora la magia de NumPy: SOLO en los lugares donde "validos" es True, 
+        # pisamos ese 1.0 con el valor real que leemos de self.campo
+        probabilidades[validos] = self.campo[filas[validos], columnas[validos]]
+
+        # --- PASO 5: Combinar probabilidades (con logaritmos) ---
+
+        # 1. Le aplicamos el logaritmo a toda la matriz (le sumamos 1e-10 por 
+        # si hay algún 0.0 perdido en el mapa, porque log(0) da error)
+        log_probs = np.log(probabilidades + 1e-10)
+
+        # 2. Sumamos los 50 rayos de cada partícula. 
+        # axis=1 hace que NumPy sume fila por fila (horizontalmente).
+        # El resultado "log_pesos" ahora es un array de 300 números (uno por partícula).
+        log_pesos = np.sum(log_probs, axis=1)
+
+        # 3. El truco maestro de estabilidad ("Log-Sum-Exp"):
+        # Le restamos el valor más alto a todos. Esto hace que el mejor peso 
+        # pase a ser 0, y los demás sean números negativos.
+        log_pesos -= np.max(log_pesos)
+
+        # 4. Exponenciamos para "deshacer" el logaritmo y volver a los pesos reales.
+        # Como el valor más alto era 0, exp(0) = 1.0. ¡Adiós underflow!
+        pesos = np.exp(log_pesos)
+
+        # --- PASO 6: Normalizar ---
+
+        # El filtro necesita que todos los pesos sumados den exactamente 1.0 (100%)
+        suma_pesos = np.sum(pesos)
+
+        # Prevenir una división por cero (siempre hay que atajarse)
+        if suma_pesos == 0:
+            N = len(particulas)
+            pesos = np.ones(N) / N  # Si todo falla, todas pesan igual (1/N)
+        else:
+            pesos /= suma_pesos
+
+        return pesos
 
     def remuestrear(self, particulas, pesos):
         """
@@ -393,7 +505,29 @@ class Localizador(Node):
              de todas a 1/N (ya cumplieron su función al elegir a quién
              copiar).
         """
-        pass
+        N = len(particulas)
+
+        # 1. Tiramos un solo valor al azar (el offset de la primera aguja)
+        offset = np.random.uniform(0, 1.0)  #uso uniforme asi todos tienen igual probabilidad
+
+        # 2. Fabricamos las N agujas separadas rígidamente
+        pasos = (np.arange(N) + offset) / N
+
+        # 3. Armamos las fronteras de la ruleta (suma acumulada)
+        acumulada = np.cumsum(pesos)
+        acumulada[-1] = 1.0  # Forzamos que el último sea 1.0 exacto por si hay error de decimales
+
+        # 4. Nos fijamos en qué porción de la ruleta cayó cada aguja
+        indices = np.searchsorted(acumulada, pasos)
+
+        # 5. Clonamos las partículas ganadoras (las que tienen mejor peso se duplican)
+        particulas_nuevas = particulas[indices].copy()
+
+        # Como ya resampleamos, todas las nuevas copias arrancan de cero con el mismo peso
+        particulas_nuevas[:, 3] = 1.0 / N
+
+        return particulas_nuevas
+
 
 
 def main(args=None):
